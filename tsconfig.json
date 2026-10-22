@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "target": "ES2023", "module": "NodeNext", "moduleResolution": "NodeNext",
+    "strict": true, "esModuleInterop": true, "skipLibCheck": true,
+    "resolveJsonModule": true, "noEmit": true, "types": ["node"]
+  },
+  "include": ["apps/api/**/*.ts", "packages/**/*.ts", "scripts/**/*.ts"],
+  "exclude": ["node_modules", "apps/clinician-web", "apps/patient-miniprogram"]
+}

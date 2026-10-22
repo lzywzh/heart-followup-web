@@ -1,0 +1,8 @@
+<script setup lang="ts">
+import {ref,watch} from 'vue';import {ElMessage} from 'element-plus';import {useAuthApi,isStaleAuthError} from '../api';
+const api=useAuthApi();
+const props=defineProps<{open:boolean;patientId:string}>();const emit=defineEmits(['update:open','saved']);const when=ref('');const title=ref('心衰随访');const busy=ref(false);
+watch(()=>props.open,open=>{if(open){const tomorrow=new Date(Date.now()+86400000);when.value=new Date(tomorrow.getTime()+8*3600000).toISOString().slice(0,10)+'T09:00';title.value='心衰随访';}});
+async function save(){if(!when.value)return ElMessage.warning('请选择随访时间');busy.value=true;try{await api('/clinician/tasks','POST',{patientId:props.patientId,title:title.value,scheduledAt:new Date(when.value+':00+08:00').toISOString()});ElMessage.success('随访已安排，患者端会显示该时间');emit('saved');emit('update:open',false);}catch(e){if(!isStaleAuthError(e))ElMessage.error((e as Error).message);}finally{busy.value=false;}}
+</script>
+<template><el-dialog :model-value="open" @update:model-value="emit('update:open',$event)" title="安排随访" width="480px"><el-form label-position="top" @submit.prevent="save"><el-form-item label="随访名称" for="schedule-title"><el-input id="schedule-title" v-model="title" maxlength="120"/></el-form-item><el-form-item label="随访时间" for="schedule-time"><input id="schedule-time" class="native-input" type="datetime-local" v-model="when" required/></el-form-item><p class="muted">时间按北京时间显示。患者在预约前 24 小时可以开始，逾期后仍可补做。</p></el-form><template #footer><el-button @click="emit('update:open',false)">取消</el-button><el-button type="primary" :loading="busy" @click="save">保存安排</el-button></template></el-dialog></template>

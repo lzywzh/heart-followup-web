@@ -1,0 +1,25 @@
+[Unit]
+Description=Heart Follow-up Patient and Doctor Web
+After=network-online.target postgresql.service heart-followup-asr.service heart-followup-tts.service
+Wants=network-online.target heart-followup-asr.service heart-followup-tts.service
+
+[Service]
+Type=simple
+User=hf-web
+Group=hf-web
+WorkingDirectory=/opt/heart-followup-web
+EnvironmentFile=/etc/heart-followup-web.env
+ExecStart=/usr/bin/node --import tsx /opt/heart-followup-web/apps/api/src/main.ts
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=45
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+StateDirectory=heart-followup-web
+MemoryMax=650M
+
+[Install]
+WantedBy=multi-user.target

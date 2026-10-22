@@ -1,0 +1,11 @@
+import 'dotenv/config';
+import { spawn } from 'node:child_process';
+import { mkdir,open,chmod } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { pipeline } from 'node:stream/promises';
+const alias=process.env.SSH_DB_ALIAS||'';if(!alias)throw new Error('Set SSH_DB_ALIAS to your own server alias before this operation');
+const directory=resolve('.runtime/backups');await mkdir(directory,{recursive:true,mode:0o700});
+const path=resolve(directory,'heart_followup_v2-'+new Date().toISOString().replace(/[:.]/g,'-')+'.dump');
+const output=await open(path,'wx',0o600);const child=spawn('ssh',['-T','-o','BatchMode=yes',alias,'sudo -n -u postgres pg_dump -Fc --no-owner --no-acl heart_followup_v2'],{stdio:['ignore','pipe','pipe'],windowsHide:true});
+child.stderr.resume();const exited=new Promise<void>((resolve,reject)=>{child.once('error',()=>reject(new Error('无法启动数据库备份')));child.once('exit',code=>code===0?resolve():reject(new Error('数据库备份未成功')));});
+await Promise.all([pipeline(child.stdout,output.createWriteStream()),exited]);await chmod(path,0o600);console.log('新版数据库备份已生成：'+path);

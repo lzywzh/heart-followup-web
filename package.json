@@ -1,0 +1,60 @@
+{
+  "name": "heart-followup-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "workspaces": [
+    "apps/api",
+    "apps/clinician-web",
+    "packages/contracts",
+    "apps/patient-web"
+  ],
+  "scripts": {
+    "dev": "tsx scripts/dev.ts",
+    "dev:api": "tsx watch apps/api/src/main.ts",
+    "dev:web": "npm run dev --workspace @heart/clinician-web",
+    "start": "tsx apps/api/src/main.ts",
+    "db:migrate": "tsx apps/api/src/db/migrate-cli.ts",
+    "account:create": "tsx scripts/admin.ts",
+    "test": "tsx --test --test-concurrency=1 apps/api/test/*.test.ts apps/patient-web/test/*.test.ts apps/clinician-web/test/*.test.ts",
+    "test:api": "tsx --test --test-concurrency=1 apps/api/test/*.test.ts",
+    "test:ui": "tsx scripts/browser-acceptance.ts",
+    "typecheck": "tsc --noEmit && vue-tsc --noEmit -p apps/clinician-web/tsconfig.json && vue-tsc --noEmit -p apps/patient-web/tsconfig.json",
+    "build": "npm run typecheck && npm run build --workspace @heart/clinician-web && npm run build --workspace @heart/patient-web",
+    "verify": "npm test && npm run build",
+    "setup:local": "tsx scripts/setup-local.ts",
+    "db:backup": "tsx scripts/backup.ts",
+    "db:restore-check": "tsx scripts/restore-check.ts",
+    "dev:patient": "npm run dev --workspace @heart/patient-web"
+  },
+  "dependencies": {
+    "@fastify/cookie": "11.1.3",
+    "@fastify/cors": "11.3.1",
+    "@fastify/rate-limit": "11.2.1",
+    "@fastify/static": "10.1.6",
+    "@fastify/websocket": "11.3.4",
+    "dotenv": "18.0.8",
+    "drizzle-orm": "^0.45.0",
+    "fastify": "5.12.7",
+    "pg": "8.23.1",
+    "tsx": "4.23.15",
+    "ws": "8.22.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "8.23.1",
+    "@types/ws": "8.18.2",
+    "playwright": "^1.56.0",
+    "typescript": "~5.9.3"
+  },
+  "license": "MIT",
+  "description": "Voice-first patient follow-up with a separate clinician portal",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lzywzh/heart-followup-web.git"
+  }
+}

@@ -1,0 +1,28 @@
+[Unit]
+Description=Heart Follow-up Local Speech Recognition
+After=network.target
+
+[Service]
+Type=simple
+User=hf-web
+Group=hf-web
+WorkingDirectory=/opt/heart-followup-asr
+Environment=ASR_MODEL_PATH=/opt/heart-followup-asr/models/asr
+Environment=ASR_PORT=3010
+Environment=OMP_NUM_THREADS=2
+Environment=OPENBLAS_NUM_THREADS=1
+ExecStart=/opt/heart-followup-asr/venv/bin/python /opt/heart-followup-asr/local_asr.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=35
+MemoryMax=650M
+StandardOutput=null
+StandardError=null
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
