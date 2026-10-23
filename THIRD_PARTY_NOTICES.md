@@ -8,7 +8,7 @@ The repository's MIT license covers original application code. Dependencies and 
 | Element Plus | https://github.com/element-plus/element-plus | MIT |
 | Fastify | https://github.com/fastify/fastify | MIT |
 | PostgreSQL | https://www.postgresql.org/about/licence/ | PostgreSQL License |
-| faster-whisper | https://github.com/SYSTRAN/faster-whisper | MIT |
+| SenseVoiceSmall / int8 ONNX conversion | See `speech/MODEL_NOTICE.md` | FunASR Model Open Source License Agreement v1.1; retain attribution and model name |
 | sherpa-onnx | https://github.com/k2-fsa/sherpa-onnx | Apache-2.0 |
 | Matcha Chinese voice / Vocos model | See `speech/MODEL_NOTICE.md` | Model repositories declare Apache-2.0; retain their notices |
 

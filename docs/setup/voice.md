@@ -1,8 +1,8 @@
 # 本地中文语音服务
 
-网页 API 通过回环 HTTP 调用两个独立的 CPU 服务。语音识别使用 faster-whisper，中文播报使用 sherpa-onnx / Matcha。模型权重需要单独下载，不能用 DeepSeek 密钥替代 ASR/TTS。
+网页 API 通过回环 HTTP 调用两个独立的 CPU 服务。语音识别使用 sherpa-onnx / SenseVoice int8，中文播报使用 sherpa-onnx / Matcha。模型权重需要单独下载，不能用 DeepSeek 密钥替代 ASR/TTS。
 
-以下命令在项目根目录的 Linux / macOS 终端执行；小内存机器建议将语音服务放在独立服务器上。示例模型为 faster-whisper-base，实际效果与速度应在目标设备和语料上评估。
+以下命令在项目根目录的 Linux / macOS 终端执行；小内存机器建议将语音服务放在独立服务器上。示例模型为 SenseVoiceSmall 的 int8 ONNX 转换，实际效果与速度应在目标设备和语料上评估。
 
 ## 环境与模型
 
@@ -10,7 +10,9 @@
 python3 -m venv .venv-speech
 . .venv-speech/bin/activate
 python -m pip install -r speech/requirements.txt -r speech/requirements-asr.txt huggingface_hub
-hf download Systran/faster-whisper-base --local-dir speech/models/asr
+hf download csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17 --local-dir speech/models/asr --include model.int8.onnx tokens.txt README.md LICENSE
+mkdir -p speech/models/asr/licenses
+cp speech/licenses/SenseVoice_MODEL_LICENSE speech/models/asr/licenses/
 hf download csukuangfj/matcha-icefall-zh-baker --local-dir speech/models/matcha-icefall-zh-baker --include model-steps-3.onnx lexicon.txt tokens.txt date.fst number.fst phone.fst README.md
 hf download k2-fsa/sherpa-onnx-models vocoder-models/vocos-22khz-univ.onnx --local-dir speech/models
 cp speech/models/vocoder-models/vocos-22khz-univ.onnx speech/models/vocos-22khz-univ.onnx
@@ -19,6 +21,7 @@ cp speech/models/vocoder-models/vocos-22khz-univ.onnx speech/models/vocos-22khz-
 下载并保留模型仓库的许可证与 README。检查以下文件的 SHA256，值须与 `speech/MODEL_NOTICE.md` 一致：
 
 ```bash
+sha256sum speech/models/asr/model.int8.onnx
 sha256sum speech/models/matcha-icefall-zh-baker/model-steps-3.onnx
 sha256sum speech/models/vocos-22khz-univ.onnx
 ```
@@ -46,7 +49,7 @@ curl -fsS http://127.0.0.1:3010/health
 curl -fsS http://127.0.0.1:3020/health
 ```
 
-二者应报告 `ready=true`。在网页 `.env` 中配置：
+二者应报告 `ready=true`；识别服务还会报告 `engine=sensevoice-int8`。模型加载成功后健康检查才可访问；上线前还要提交一段 16kHz WAV 验证实际推理。在网页 `.env` 中配置：
 
 ```dotenv
 LOCAL_ASR_URL=http://127.0.0.1:3010
@@ -58,7 +61,7 @@ VOICE_TTS_MODE=server
 
 ## 行为与边界
 
-ASR 接受有限大小的音频，内存解码，单并发，不记录请求正文。TTS 限制文本 500 字、单并发；合成超过 22 秒时进程退出，正式部署需使用 systemd 的 `Restart=on-failure` 恢复。手动终端运行时需要自行重新启动。API 还有独立的超时、权限、缓存与版本检查。
+ASR 仅接收 16kHz 单声道 PCM16 WAV，时长 0.1–30 秒；网页限制单句 24 秒。内存解码、单并发、不记录请求正文，不使用医学词表提示自动补全。请求超过 30 秒时进程退出，需由 systemd 重启。识别错误（包括否定词和数字）仍可能发生，实机语料需单独评估，不能用合成语音测试推断真实准确率。TTS 限制文本 500 字、单并发；合成超过 22 秒时进程退出，正式部署需使用 systemd 的 `Restart=on-failure` 恢复。手动终端运行时需要自行重新启动。API 还有独立的超时、权限、缓存与版本检查。
 
 服务只绑定 `127.0.0.1`。若网页与语音服务不在同一机器，需单独设计私网连接、鉴权与加密；不要把这两个无独立账号鉴权的回环接口直接暴露公网。
 

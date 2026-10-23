@@ -18,7 +18,7 @@ flowchart LR
   P[患者网站] -->|PCM16 WAV| API[Fastify API]
   D[医生工作台] --> API
   API --> DB[(PostgreSQL)]
-  API --> ASR[本地 faster-whisper]
+  API --> ASR[本地 SenseVoice int8]
   ASR --> API
   API --> LLM[DeepSeek 信息提取]
   API --> F[有界对话状态机]
@@ -93,6 +93,7 @@ ASR/TTS 只监听服务器回环端口。原始录音不写入患者音频文件
 ```bash
 npm test
 npm run build
+python -m pip install numpy==2.2.6
 python -m unittest discover -s speech -p 'test_*.py' -v
 ```
 

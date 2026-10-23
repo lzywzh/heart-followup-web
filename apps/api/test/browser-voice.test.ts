@@ -187,8 +187,8 @@ test('browser voice: a reclaimed audio lease fences a late model worker and reus
   const p=await boundPatient(f.db),s=await begin(f,p.user);const key=randomUUID();
   const request={method:'POST' as const,url:uploadUrl(s.id,s.version,key),headers:{...p.user.headers,'content-type':'audio/wav'},payload:wav()};
   const old=f.app.inject(request);t.after(()=>release.resolve());await enteredWithin(entered.promise);
-  await f.db.query("UPDATE browser_audio_requests SET lease_until=now()-interval '1 second' WHERE session_id=$1",[s.id]);
-  await f.db.query("UPDATE followup_turns SET lease_until=now()-interval '1 second' WHERE session_id=$1",[s.id]);
+  await f.db.query("UPDATE browser_audio_requests SET lease_until=now()-interval '10 minutes' WHERE session_id=$1",[s.id]);
+  await f.db.query("UPDATE followup_turns SET lease_until=now()-interval '10 minutes' WHERE session_id=$1",[s.id]);
   const replacement=await f.app.inject(request);assert.equal(replacement.statusCode,200,replacement.body);
   release.resolve();const late=await old;assert.equal(late.statusCode,409,late.body);
   assert.equal(asrCalls,1);assert.equal(modelCalls,2);
@@ -198,11 +198,12 @@ test('browser voice: a reclaimed audio lease fences a late model worker and reus
 });
 
 test('browser voice: reload projects expired work as recoverable and accepts a fresh answer',async t=>{
+  // Leave a clear expiry margin when the development database runs on another host.
   const f=await httpFixture(t,{voiceTtsMode:'browser'},{localAsr:{status:async()=>({available:true}),transcribe:async()=> '呼吸还好'}});
   const p=await boundPatient(f.db),s=await begin(f,p.user);const key=randomUUID();
-  await f.db.query("INSERT INTO followup_turns(id,session_id,client_message_id,sequence,patient_text,source,session_version,status,lease_until) VALUES($1,$2,$3,1,'上一句未完成的语音','voice',2,'pending',now()-interval '1 second')",[randomUUID(),s.id,key]);
+  await f.db.query("INSERT INTO followup_turns(id,session_id,client_message_id,sequence,patient_text,source,session_version,status,lease_until) VALUES($1,$2,$3,1,'上一句未完成的语音','voice',2,'pending',now()-interval '10 minutes')",[randomUUID(),s.id,key]);
   await f.db.query('UPDATE followup_sessions SET version=2 WHERE id=$1',[s.id]);
-  await f.db.query("INSERT INTO browser_audio_requests(id,session_id,account_id,client_message_id,expected_version,payload_hash,status,attempt_token,lease_until) VALUES($1,$2,$3,$4,1,'test-hash','processing',$5,now()-interval '1 second')",[randomUUID(),s.id,p.user.id,key,randomUUID()]);
+  await f.db.query("INSERT INTO browser_audio_requests(id,session_id,account_id,client_message_id,expected_version,payload_hash,status,attempt_token,lease_until) VALUES($1,$2,$3,$4,1,'test-hash','processing',$5,now()-interval '10 minutes')",[randomUUID(),s.id,p.user.id,key,randomUUID()]);
   const restored=await f.app.inject({url:`/api/v1/patient/followups/${s.id}`,headers:p.user.headers});
   assert.equal(restored.json().turns[0].status,'failed');assert.equal(restored.json().audioOperations[0].status,'stale');
   const answered=await f.app.inject({method:'POST',url:uploadUrl(s.id,2,randomUUID()),headers:{...p.user.headers,'content-type':'audio/wav'},payload:wav()});
