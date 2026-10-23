@@ -13,6 +13,28 @@ async function started(t: any, override: any = {}, providers: any = {}) {
 const say = (f: any, text: string, key = randomUUID(), version = f.session.version) => f.app.inject({ method: 'POST', url: `/api/v1/patient/followups/${f.session.id}/messages`, headers: f.p.user.headers, payload: { clientMessageId: key, expectedVersion: version, text } });
 function deferred<T=any>(){let resolve!:(value:T)=>void;let reject!:(error:Error)=>void;const promise=new Promise<T>((r,j)=>{resolve=r;reject=j;});return {promise,resolve,reject};}
 
+test('adaptive dialogue: corrected turns are absent from the following planner history',async t=>{
+  const inputs:any[]=[];
+  const f=await started(t,{}, {dialogue:{nextTurn:async(input:any)=>{inputs.push(input);return {facts:[{field:'breathing',evidence:input.text}],reply:'您还想说说哪些情况？',action:'discuss'};}}});
+  const a=await say(f,'最近活动气喘');const first=a.json();
+  const b=await f.app.inject({method:'POST',url:`/api/v1/patient/followups/${f.session.id}/corrections`,headers:f.p.user.headers,payload:{turnId:first.turns[0].id,text:'更正，最近活动没有气喘',expectedVersion:first.version,clientMessageId:randomUUID()}});
+  assert.equal(b.statusCode,200,b.body);assert.deepEqual(inputs[1].history,[]);
+  const c=await say(f,'还想了解睡眠',randomUUID(),b.json().version);assert.equal(c.statusCode,200,c.body);
+  assert.equal(inputs[2].history.length,1);assert.equal(inputs[2].history[0].patientText,'更正，最近活动没有气喘');
+});
+
+test('adaptive dialogue: patient ending that finishes after pause submits once and preserves the final evidence',async t=>{
+  const entered=deferred<void>(),release=deferred<void>();
+  const f=await started(t,{}, {dialogue:{nextTurn:async()=>{entered.resolve();await release.promise;return {facts:[{field:'concerns',evidence:'晚上容易醒'}]};}}});
+  t.after(()=>release.resolve());
+  const key=randomUUID(),work=say(f,'晚上容易醒，没什么要补充了',key);await entered.promise;
+  await f.app.inject({method:'POST',url:`/api/v1/patient/followups/${f.session.id}/pause`,headers:f.p.user.headers});release.resolve();
+  const result=await work;assert.equal(result.statusCode,200,result.body);assert.equal(result.json().status,'submitted');assert.match(result.json().summary.items.find((i:any)=>i.field==='concerns').value,/晚上容易醒/);
+  const repeat=await say(f,'晚上容易醒，没什么要补充了',key);assert.equal(repeat.statusCode,200);assert.equal(repeat.json().version,result.json().version);
+  const manual=await f.app.inject({method:'POST',url:`/api/v1/patient/followups/${f.session.id}/end-call`,headers:f.p.user.headers,payload:{expectedVersion:result.json().version}});assert.equal(manual.statusCode,200);
+  assert.equal((await f.db.query("SELECT count(*) FROM audit_events WHERE action='followup.submit' AND target_id=$1",[f.session.id])).rows[0].count,'1');
+});
+
 test('production: missing protocol approval explains how to unblock followup and creates no session', async t => {
   const f = await httpFixture(t, { nodeEnv: 'production', authMode: 'wechat', collectionMode: 'ai' });
   const doctor = await identity(f.db, 'clinician');
@@ -47,10 +69,12 @@ test('errors: database uniqueness conflicts do not expose internal constraint de
 
 test('followup: reclaimed turn fences out the earlier execution even for the same version',async t=>{
   const entered=deferred<void>();const old=deferred();let calls=0;
+  t.after(()=>old.resolve({facts:[]}));
   const f=await started(t,{}, {dialogue:{nextTurn:async()=>{if(++calls===1){entered.resolve();return old.promise;}return {facts:[{field:'breathing',evidence:'最近呼吸还好',status:'reported'}]};}}});
   const key=randomUUID();const first=Promise.resolve(say(f,'最近呼吸还好',key));await entered.promise;
-  await f.db.query("UPDATE followup_turns SET lease_until=now()-interval '1 second' WHERE session_id=$1",[f.session.id]);
-  const fresh=await say(f,'最近呼吸还好',key);assert.equal(fresh.statusCode,200);old.resolve({facts:[]});const stale=await first;
+  // Dedicated test DB may be on another host; expire well beyond clock skew.
+  await f.db.query("UPDATE followup_turns SET lease_until=now()-interval '10 minutes' WHERE session_id=$1",[f.session.id]);
+  const fresh=await say(f,'最近呼吸还好',key);old.resolve({facts:[]});const stale=await first;assert.equal(fresh.statusCode,200,fresh.body);
   assert.equal(stale.statusCode,409);const current=(await f.app.inject({url:`/api/v1/patient/followups/${f.session.id}`,headers:f.p.user.headers})).json();
   assert.equal(current.summary.items[0].value,'最近呼吸还好');assert.equal((await f.db.query("SELECT count(*)::int n FROM agent_runs WHERE role='dialogue'")).rows[0].n,1);
 });
@@ -67,7 +91,7 @@ for(const late of ['success','failure'])test(`jobs: reclaimed worker is not over
 });
 
 test('followup: expired pending after restart can be submitted as unconfirmed without losing original text',async t=>{
-  const f=await started(t);await f.db.query("INSERT INTO followup_turns(id,session_id,client_message_id,sequence,patient_text,session_version,lease_until) VALUES($1,$2,$3,1,'重启前保存但未完成的回答',2,now()-interval '1 second')",[randomUUID(),f.session.id,randomUUID()]);
+  const f=await started(t);await f.db.query("INSERT INTO followup_turns(id,session_id,client_message_id,sequence,patient_text,session_version,lease_until) VALUES($1,$2,$3,1,'重启前保存但未完成的回答',2,now()-interval '10 minutes')",[randomUUID(),f.session.id,randomUUID()]);
   await f.db.query('UPDATE followup_sessions SET version=2 WHERE id=$1',[f.session.id]);
   const result=await f.app.inject({method:'POST',url:`/api/v1/patient/followups/${f.session.id}/submit`,headers:f.p.user.headers,payload:{expectedVersion:2,confirmed:false}});
   assert.equal(result.statusCode,200,result.body);assert.equal(result.json().patientConfirmed,false);assert.equal(result.json().turns[0].status,'failed');assert.equal(result.json().turns[0].patientText,'重启前保存但未完成的回答');
@@ -142,18 +166,17 @@ test('followup: missing AI cannot fabricate replies and severe symptoms stop rou
   assert.match(r.json().turns[0].assistantText, /医护|医生|人工/);
   const emergency = await started(t);
   const e = await say(emergency, '现在喘得说不出完整的话');
-  assert.equal(e.statusCode, 200); assert.equal(e.json().requiresHumanReview, true); assert.equal(e.json().status, 'handoff');
+  assert.equal(e.statusCode, 200); assert.equal(e.json().requiresHumanReview, true); assert.equal(e.json().status, 'active');
   assert.ok(!e.body.includes('医生已收到'));
 });
 
-test('followup: refusal/unknown is not normal and collection does not loop beyond ten answers', async t => {
+test('followup: unknown is not normal and conversation remains available after ten answers', async t => {
   const f = await started(t);
   let s = f.session;
-  for (let n=0; n<10; n++) {
+  for (let n=0; n<12; n++) {
     const r = await say(f, '我不清楚', randomUUID(), s.version); assert.equal(r.statusCode, 200, r.body); s = r.json();
-    if (s.status === 'awaiting_confirmation') break;
   }
-  assert.equal(s.status, 'awaiting_confirmation'); assert.equal(s.summary.complete, false);
+  assert.equal(s.turns.length,12); assert.ok(['active','awaiting_confirmation'].includes(s.status)); assert.equal(s.summary.complete, false);
   assert.ok(s.summary.items.some((i: any) => i.status === 'unknown'));
 });
 

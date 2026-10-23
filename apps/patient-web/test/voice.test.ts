@@ -18,6 +18,13 @@ function setup() {
   const controller = new VoiceController(boundaries);
   return { controller, events, playback, upload, boundaries, segment: () => onSegment!(new Blob(['wav'])) };
 }
+
+test('Agent closure leaves microphone open and patient-requested completion plays farewell then releases it',async()=>{
+  const h=setup();h.playback.resolve();await h.controller.start({...session(),status:'awaiting_confirmation'});assert.equal(h.controller.state,'listening');
+  h.segment();await tick();const before=h.events.filter(e=>e==='speak').length;
+  h.upload.resolve({session:{...answer,status:'submitted',turns:[{status:'completed',patientText:'没什么要补充了',assistantText:'好的，再见。'}]}});
+  await tick();await tick();assert.equal(h.controller.state,'ended');assert.equal(h.controller.lastText,'好的，再见。');assert.equal(h.events.filter(e=>e==='speak').length,before+1);assert.equal(h.events.at(-1),'mic-release');assert.ok(!h.events.some(e=>e.startsWith('end:')));
+});
 test('assistant finishes speaking before microphone begins listening', async () => {
   const h = setup(); const start = h.controller.start(session()); await tick();
   assert.equal(h.controller.state, 'speaking'); assert.ok(!h.events.includes('listen'));

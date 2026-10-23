@@ -9,7 +9,9 @@ export const QUESTIONS: Record<Field,string> = {
 export const GREETING = '您好，我是随访助手。我们先聊聊您最近的身体情况。' + QUESTIONS.breathing;
 export type FactStatus = 'reported' | 'unknown' | 'declined';
 export interface Fact { field: Field; value: string; evidence: string; status: FactStatus; turnId?: string; }
-export interface CollectionState { fields: Partial<Record<Field,Fact>>; attempts: Partial<Record<Field,number>>; nextField: Field | null; answerCount: number; }
+export type ConversationPhase = 'collection' | 'conversation' | 'closing' | 'finished';
+export interface DialogueHistoryTurn { patientText:string; assistantText:string; }
+export interface CollectionState { fields: Partial<Record<Field,Fact>>; attempts: Partial<Record<Field,number>>; nextField: Field | null; answerCount: number; phase?:ConversationPhase; focusField?:Field; concernNotes?:Fact[]; urgent?:boolean; }
 export const initialState = (): CollectionState => ({ fields:{}, attempts:{}, nextField:'breathing', answerCount:0 });
 
 export function safetySignal(text: string) {
@@ -36,12 +38,24 @@ export function rebuildState(turns: any[]): CollectionState {
   const state = initialState();
   const superseded = new Set(turns.filter(t => t.supersedes_id).map(t => t.supersedes_id));
   for (const turn of turns) if (turn.status === 'completed' && !superseded.has(turn.id)) {
-    for (const fact of turn.evidence || []) if (FIELDS.includes(fact.field)) state.fields[fact.field as Field] = fact;
+    if(safetySignal(turn.patient_text||''))state.urgent=true;
+    for (const fact of turn.evidence || []) if (FIELDS.includes(fact.field)) rememberFact(state,fact);
   }
   state.answerCount = turns.filter(t => t.source !== 'correction' && t.status === 'completed').length;
   state.nextField = FIELDS.find(f => !state.fields[f]) || null;
+  state.phase=coreCollected(state)?'conversation':'collection';
   return state;
 }
+export const coreCollected=(state:CollectionState)=>FIELDS.filter(f=>f!=='concerns').every(f=>Boolean(state.fields[f]));
+export function rememberFact(state:CollectionState,fact:Fact) {
+  if(fact.field==='concerns'){
+    state.concernNotes ||= state.fields.concerns?[state.fields.concerns]:[];
+    if(!state.concernNotes.some(note=>note.turnId===fact.turnId&&note.evidence===fact.evidence))state.concernNotes.push(fact);
+  }
+  state.fields[fact.field]=fact;
+}
 export function collectionSummary(state: CollectionState) {
-  return { complete: FIELDS.every(f => state.fields[f]?.status === 'reported'), items: FIELDS.map(field => ({ ...(state.fields[field] || { value:'尚未采集', evidence:'', status:'missing' }), field, label:LABELS[field] })) };
+  const fields={...state.fields};
+  if(state.concernNotes?.length){const notes=state.concernNotes;fields.concerns={...notes.at(-1)!,value:notes.map(n=>n.value).join('；'),evidence:notes.map(n=>n.evidence).join('；')};}
+  return { complete: FIELDS.every(f => fields[f]?.status === 'reported'), items: FIELDS.map(field => ({ ...(fields[field] || { value:'尚未采集', evidence:'', status:'missing' }), field, label:LABELS[field] })) };
 }

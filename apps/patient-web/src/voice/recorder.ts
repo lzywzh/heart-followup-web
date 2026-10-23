@@ -43,7 +43,16 @@ export class PcmRecorder {
   }
   private receive(frame:Float32Array){
     if(!this.active||!this.context||!this.detector)return;
-    this.frames.push(frame);this.count+=frame.length;const sample=this.detector.push(frame);this.voiced=sample.voiced;this.level?.(sample.level);
+    const sample=this.detector.push(frame);
+    this.frames.push(frame);this.count+=frame.length;
+    // Before speech, keep only a small pre-roll; at the audio limit discard pre-roll, never the last words.
+    const limit=Math.floor(this.context.sampleRate*(sample.started?24:.3));
+    while(this.count>limit&&this.frames.length){
+      const excess=this.count-limit;const first=this.frames[0];
+      if(first.length<=excess){this.frames.shift();this.count-=first.length;}
+      else{this.frames[0]=first.slice(excess);this.count-=excess;}
+    }
+    this.voiced=sample.voiced;this.level?.(sample.level);
     if(sample.finish)this.finish();
   }
   finish(){

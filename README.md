@@ -20,15 +20,15 @@ flowchart LR
   API --> DB[(PostgreSQL)]
   API --> ASR[本地 SenseVoice int8]
   ASR --> API
-  API --> LLM[DeepSeek 信息提取]
-  API --> F[有界对话状态机]
+  API --> LLM[DeepSeek 对话规划与提取]
+  API --> F[对话状态与患者结束意图]
   F --> TTS[本地中文 TTS]
   TTS -->|WAV / Web Audio| P
   API --> J[后台知识与安全复核]
   J --> DB
 ```
 
-Agent 部分是自定义 TypeScript 编排，包含采集、协议/安全检查与后台复核；实时轮次只运行一次信息提取，再选择下一问。当前没有使用 LangChain、LangGraph 或向量 RAG，也不向患者展示内部推理链。没有测量、不确定、拒答和未采集分别保留，不推断为正常。
+Agent 部分是自定义 TypeScript 编排，包含采集、协议/安全检查与后台复核；实时轮次只调用一次模型，同时提取逐字证据、生成口语回复并决定追问、继续交流或提议收尾。模型结合病历、已采集事实及最近 12 轮有效对话，可以追问已回答的情况；核心清单保留呼吸、肿胀、体重与用药，核心完成后仍可多轮自由交流。当前没有使用 LangChain、LangGraph 或向量 RAG，也不向患者展示内部推理链。没有测量、不确定、拒答和未采集分别保留，不推断为正常。
 
 | 目录 | 内容 |
 |---|---|
@@ -67,13 +67,13 @@ npm run dev
 
 `setup:local` 迁移数据库，并创建本地医生/管理员账号；随机初始密码保存在被 Git 忽略的 `.runtime/account-*.json`。没有通用默认密码。医生账号默认名称为 `doctor`，管理员用于初始化；日常随访请使用医生账号。首次初始化不创建患者或病历。
 
-默认 `COLLECTION_MODE=scripted` 只用于本地流程联调。启用 AI 信息提取时，在本机 `.env` 设置 `COLLECTION_MODE=ai` 与自己的 `DEEPSEEK_API_KEY`。真实语音还需按[语音服务说明](docs/setup/voice.md)启动 ASR 和 TTS；仅启动网页不会自动具备语音能力。
+默认 `COLLECTION_MODE=scripted` 只用于本地流程联调，不具备模型生成问答。启用 AI 对话规划时，在本机 `.env` 设置 `COLLECTION_MODE=ai` 与自己的 `DEEPSEEK_API_KEY`。真实语音还需按[语音服务说明](docs/setup/voice.md)启动 ASR 和 TTS；仅启动网页不会自动具备语音能力。
 
 ## 开始一次随访
 
 1. 医生登录，核对采集协议，使用合成资料建档，开通患者账号并安排随访。
 2. 患者用独立账号登录并完成首次改密，在任务开放后进入语音随访。
-3. 点击开始、允许麦克风，听完问题后直接回答；完成后点击结束，等待小结保存。
+3. 点击开始、允许麦克风，听完问题后直接回答。Agent 提议收尾后仍能继续提问；明确说“没什么要补充了”等结束语，或手动挂断后保存小结。症状否定、静音、轮数和清单完成均不会自动挂断。
 4. 医生在工作台查看同一份采集小结，审核后发布反馈。
 
 生产环境拒绝开发鉴权与 scripted 采集，未审核的采集协议不能直接启用。临床协议草案见 [clinical-protocol.md](docs/design/clinical-protocol.md)。
@@ -81,6 +81,8 @@ npm run dev
 ## 语音与浏览器
 
 默认 `VOICE_TTS_MODE=server`：在同一服务器运行 sherpa-onnx / Matcha 中文合成，返回标准 WAV。点击开始时解锁 Web Audio，播放不要求浏览器提供 SpeechSynthesis。`browser` 模式依赖设备中文声音；`cloud` 模式需要另行配置云语音服务。
+
+开口前持续等待，只保留 300 毫秒前导音频；开口后约 2.5 秒安静才发送一句，恢复说话会重置等待，也可手动发送。单句最多 24 秒，从开口起计算并包含中途停顿，分句不会结束通话。
 
 麦克风需要受信任的 HTTPS 或本机 localhost，以及设备支持 AudioWorklet。手机访问开发电脑的普通 HTTP 局域网地址不能代替 HTTPS。微信、iOS/Android 的麦克风、自动播放和后台暂停仍需实机验证，不承诺所有版本兼容。
 

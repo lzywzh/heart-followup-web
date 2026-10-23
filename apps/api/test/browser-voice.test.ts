@@ -26,6 +26,32 @@ function uploadUrl(id: string, version: number, messageId: string) {
   return `/api/v1/patient/followups/${id}/audio?expectedVersion=${version}&clientMessageId=${messageId}`;
 }
 
+test('adaptive voice: closure stays open, questions resume and explicit ending saves final facts atomically',async t=>{
+  let input='';let context:any;
+  const f=await httpFixture(t,{voiceTtsMode:'server'},{
+    localAsr:{status:async()=>({available:true}),transcribe:async()=>input},localTts:{status:async()=>({available:true}),synthesize:async()=>wav()},
+    dialogue:{nextTurn:async(value:any)=>{context=value;return input==='今天先说这些'?{facts:[],reply:'您还想补充什么吗？',action:'offer_close'}:{facts:[{field:'concerns',evidence:input.split('，')[0]}],reply:'您大概什么时候容易醒？',action:'discuss',focusField:'concerns'};}},
+  });
+  const doctor=await identity(f.db,'clinician'),p=await boundPatient(f.db,doctor.id);
+  const task=(await f.db.query("INSERT INTO followup_tasks(id,patient_id,clinician_id,title,opens_at,scheduled_at) VALUES($1,$2,$3,'adaptive test',now()-interval '1 hour',now()+interval '1 day') RETURNING *",[randomUUID(),p.patientId,doctor.id])).rows[0];
+  let s=await begin(f,p.user,task.id);
+  const send=async(text:string,key=randomUUID())=>{input=text;const response=await f.app.inject({method:'POST',url:uploadUrl(s.id,s.version,key),headers:{...p.user.headers,'content-type':'audio/wav'},payload:wav()});assert.equal(response.statusCode,200,response.body);s=response.json().session;return response;};
+  await send('今天先说这些');assert.equal(s.status,'awaiting_confirmation');assert.equal(s.conversationPhase,'closing');
+  await send('我还想问睡眠');assert.equal(s.status,'active');assert.equal(context.history.length,1);assert.equal(context.history[0].patientText,'今天先说这些');
+  await f.app.inject({method:'POST',url:`/api/v1/patient/followups/${s.id}/pause`,headers:p.user.headers});
+  const resume=await f.app.inject({method:'POST',url:`/api/v1/patient/followups/${s.id}/resume`,headers:p.user.headers});assert.equal(resume.json().status,'active');
+  const previousVersion=s.version,key=randomUUID();
+  await send('最近白天也累，没什么要补充了',key);
+  assert.equal(s.status,'submitted');assert.equal(s.patientConfirmed,false);assert.equal(s.conversationPhase,'finished');
+  assert.match(s.summary.items.find((i:any)=>i.field==='concerns').value,/睡眠.*白天也累/);
+  const retry=await f.app.inject({method:'POST',url:uploadUrl(s.id,previousVersion,key),headers:{...p.user.headers,'content-type':'audio/wav'},payload:wav()});assert.equal(retry.statusCode,200,retry.body);assert.equal(retry.json().session.version,s.version);
+  const saved=(await f.db.query('SELECT * FROM followup_sessions WHERE id=$1',[s.id])).rows[0];assert.equal(saved.submission_version,s.version);assert.ok(saved.submitted_at);assert.equal(saved.patient_confirmed,false);
+  assert.equal((await f.db.query('SELECT status FROM followup_tasks WHERE id=$1',[task.id])).rows[0].status,'submitted');
+  assert.equal((await f.db.query("SELECT count(*) FROM background_jobs WHERE session_id=$1 AND session_version=$2 AND kind='review'",[s.id,s.version])).rows[0].count,'1');
+  const doctorView=await f.app.inject({url:`/api/v1/clinician/followups/${s.id}`,headers:doctor.headers});assert.equal(doctorView.statusCode,200);assert.deepEqual(doctorView.json().briefSummary,s.briefSummary);
+  assert.equal((await f.app.inject({method:'POST',url:`/api/v1/patient/followups/${s.id}/browser-speech`,headers:p.user.headers,payload:{expectedVersion:s.version}})).statusCode,200);
+});
+
 test('browser voice: capabilities check local ASR and distinguish device speech from cloud', async t => {
   const f = await httpFixture(t, { voiceTtsMode:'browser' }, { localAsr:{ status:async()=>({available:false}) } });
   const user = await identity(f.db,'patient');

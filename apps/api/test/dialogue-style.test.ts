@@ -21,10 +21,10 @@ test('unknown weight gets a relevant acknowledgement without inventing a number 
   assert.match(result.reply,/没量|没有测量/);assert.match(result.reply,/用药|药/);
   assert.doesNotMatch(result.reply,/体重正常|没有异常|不用担心/);
 });
-test('completed collection uses a spoken ending instruction without asking another question',async()=>{
+test('explicit no-supplement ends with a farewell after preserving the collection',async()=>{
   const state=initialState();
   for(const field of ['breathing','swelling','weight','medication'] as const)state.fields[field]={field,value:'已报告',evidence:'已报告',status:'reported'};
   state.nextField='concerns';
   const result=await turn('其他没有想补充的情况',[{field:'concerns',evidence:'其他没有想补充的情况',status:'reported'}],state);
-  assert.equal(result.done,true);assert.match(result.reply,/结束通话/);assert.doesNotMatch(result.reply,/请核对采集摘要/);
+  assert.equal(result.endRequested,true);assert.match(result.reply,/通话已结束/);assert.doesNotMatch(result.reply,/请核对采集摘要/);
 });

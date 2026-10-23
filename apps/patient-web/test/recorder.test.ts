@@ -30,6 +30,28 @@ async function withFailingWorklet(run:(h:{recorder:PcmRecorder;tracks:any[];cont
   const recorder=new PcmRecorder('/synthetic-worklet.js');
   try{await run({recorder,tracks,contexts,nodes});}finally{recorder.release();for(const [key,descriptor]of previous){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}if(media)Object.defineProperty(navigator,'mediaDevices',media);else Reflect.deleteProperty(navigator,'mediaDevices');}
 }
+
+test('long initial silence stays listening with bounded pre-roll and preserves later intermittent speech',async()=>{
+  await withFailingWorklet(async({recorder,nodes})=>{
+    await recorder.prepare();const errors:Error[]=[];const clips:Blob[]=[];
+    recorder.start(blob=>clips.push(blob),()=>{},e=>errors.push(e));
+    const feed=(seconds:number,level=0)=>{for(let n=0;n<seconds*10;n++)nodes[0].port.onmessage({data:new Float32Array(1600).fill(level)});};
+    feed(90);assert.deepEqual(errors,[]);assert.equal(clips.length,0);
+    assert.ok((recorder as any).count<=4800,'initial buffered audio must stay within 300ms');
+    feed(.3,.1);feed(2);assert.equal(clips.length,0);feed(.3,.1);feed(2.6);
+    assert.deepEqual(errors,[]);assert.equal(clips.length,1);
+    const data=new DataView(await clips[0].arrayBuffer());assert.ok(data.getUint32(40,true)/32000<6,'long initial silence must not crowd out speech');
+    assert.ok(data.getUint32(40,true)/32000>4.8,'both sides of a two-second pause must be retained');
+  },'none');
+});
+test('recorder emits a bounded WAV at 24 seconds after speech begins',async()=>{
+  await withFailingWorklet(async({recorder,nodes})=>{
+    await recorder.prepare();const clips:Blob[]=[];const errors:Error[]=[];recorder.start(blob=>clips.push(blob),()=>{},e=>errors.push(e));
+    for(let n=0;n<300;n++)nodes[0].port.onmessage({data:new Float32Array(1600)});
+    for(let n=0;n<240;n++)nodes[0].port.onmessage({data:new Float32Array(1600).fill(.08)});
+    assert.deepEqual(errors,[]);assert.equal(clips.length,1);assert.ok(clips[0].size<=768044);
+  },'none');
+});
 test('failed worklet setup immediately releases the acquired microphone and audio context',async()=>{
   await withFailingWorklet(async({recorder,tracks,contexts})=>{
     await assert.rejects(recorder.prepare(),/worklet load failed/);

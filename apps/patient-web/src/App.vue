@@ -95,7 +95,7 @@ onBeforeUnmount(()=>{controller.dispose();document.removeEventListener('visibili
           <p v-if="view.error" class="error" role="alert">{{view.error}}</p>
           <div v-if="view.state==='ready'" class="start-call"><button class="primary large" @click="begin">开启麦克风，开始随访 <span>→</span></button><p>{{caps?.ttsMode==='browser'?'开始后将使用当前设备的中文声音，请开启媒体音量。':'请开启媒体音量。助手说完后，直接回答即可。'}}</p></div>
           <div v-else class="call-controls"><button v-if="view.state==='listening'" class="primary" @click="controller.finishSentence()">我说完这一句了</button><button v-if="view.state==='speaking'" class="primary" @click="controller.interrupt()">打断，我来说</button><button v-if="['listening','speaking'].includes(view.state)" class="secondary" @click="controller.replay()">重复上一句</button><button v-if="['paused','error'].includes(view.state)" class="primary" @click="controller.resume()">{{view.state==='paused'?'继续通话':'重试 / 恢复'}}</button><button v-if="!['paused','ending'].includes(view.state)" class="secondary" @click="controller.pause()">暂停</button><button class="end-button" :disabled="view.state==='ending'||view.state==='authorizing'" @click="controller.end()">{{view.state==='ending'?'正在保存…':'结束通话'}}</button></div>
-          <p class="voice-foot">停顿约一秒自动结束一句 · 每句最多 24 秒<br>切换到后台会暂停，请回到页面后手动继续。</p>
+          <p class="voice-foot">开口后安静约 2.5 秒发送一句，短暂停顿可以接着说 · 每句最多 24 秒<br>想快一点发送，可点“我说完这一句了”。结束时请说“没什么要补充了”，也可手动挂断。<br>切换到后台会暂停，请回到页面后手动继续。</p>
         </section>
       </template>
       <template v-else-if="loading&&!data"><div class="card empty" role="status">正在加载您的档案…</div></template>

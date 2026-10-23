@@ -13,11 +13,16 @@ export async function ownedSession(db: Database, identity: Identity, id: string,
   if (!r.rowCount) throw notFound(); return r.rows[0];
 }
 export async function turnsFor(db: Database, id: string) { return (await db.query('SELECT * FROM followup_turns WHERE session_id=$1 ORDER BY sequence',[id])).rows; }
+function dialogueHistory(turns:any[],replacedId?:string){
+  const superseded=new Set(turns.filter(t=>t.status==='completed'&&t.supersedes_id).map(t=>t.supersedes_id));
+  if(replacedId)superseded.add(replacedId);
+  return turns.filter(t=>t.status==='completed'&&!superseded.has(t.id)).slice(-12).map(t=>({patientText:t.patient_text,assistantText:t.assistant_text}));
+}
 export async function patientSessionView(db: Database, session: any) {
   const turns = await turnsFor(db,session.id); const superseded = new Set(turns.filter(t=>t.status==='completed'&&t.supersedes_id).map(t=>t.supersedes_id));
   const summary = session.summary || collectionSummary(session.state?.fields ? session.state : initialState());
   const operations = await db.query('SELECT client_message_id,status,expected_version,transcript,lease_until FROM browser_audio_requests WHERE session_id=$1 ORDER BY created_at',[session.id]);
-  return { id:session.id, taskId:session.task_id, status:session.status, version:session.version, greeting:GREETING,
+  return { id:session.id, taskId:session.task_id, status:session.status, version:session.version, greeting:GREETING,conversationPhase:session.state?.phase||'collection',
     protocolVersion:session.protocol_version, patientConfirmed:session.patient_confirmed, requiresHumanReview:session.priority!=='routine',
     summary, briefSummary:briefSummary(summary),
     audioOperations:operations.rows.map(op=>({clientMessageId:op.client_message_id,status:op.status==='processing'&&new Date(op.lease_until)<=new Date()?'stale':op.status,expectedVersion:op.expected_version,transcript:op.transcript||undefined,leaseUntil:op.lease_until,retryable:op.status==='failed'||(op.status==='processing'&&new Date(op.lease_until)<=new Date())})),
@@ -79,7 +84,7 @@ export function createFollowupService({db,config,providers}: {db:Database;config
         const attemptToken=randomUUID();
         await tx.query("UPDATE followup_turns SET status='pending',lease_until=now()+interval '60 seconds',attempt_token=$2 WHERE id=$1",[existing.id,attemptToken]);
         const all=await turnsFor(tx,id); const state=input.turnId?rebuildState(all):s.state;
-        return {cached:false as const, turnId:existing.id,version:s.version,state,patientId:s.patient_id,attemptToken};
+        return {cached:false as const, turnId:existing.id,version:s.version,state,patientId:s.patient_id,attemptToken,history:dialogueHistory(all,input.turnId)};
       }
       if (!['active','awaiting_confirmation'].includes(s.status)) throw conflict('随访已暂停或结束，请先查看当前状态');
       if (s.version!==input.expectedVersion) throw conflict();
@@ -95,11 +100,11 @@ export function createFollowupService({db,config,providers}: {db:Database;config
         [turnId,id,input.clientMessageId,all.length+1,input.text,input.turnId?'correction':input.source||'text',input.turnId||null,version,attemptToken]);
       await tx.query('UPDATE followup_sessions SET version=$1,updated_at=now() WHERE id=$2',[version,id]);
       const state=input.turnId?rebuildState([...all,{status:'pending',supersedes_id:input.turnId}]):s.state;
-      return {cached:false as const,turnId,version,state,patientId:s.patient_id,attemptToken};
+      return {cached:false as const,turnId,version,state,patientId:s.patient_id,attemptToken,history:dialogueHistory(all,input.turnId)};
     });
     if (claim.cached) return view(identity,id);
     const p=await ownPatient(db,identity,claim.patientId);
-    const outcome=await runDialogue({config,providers,text:input.text,state:claim.state,patient:p,turnId:claim.turnId,isCorrection:Boolean(input.turnId)});
+    const outcome=await runDialogue({config,providers,text:input.text,state:claim.state,patient:p,turnId:claim.turnId,isCorrection:Boolean(input.turnId),history:claim.history});
     return db.transaction(async tx => {
       await guard(tx,identity);
       const s=await ownedSession(tx,identity,id,true);
@@ -108,12 +113,17 @@ export function createFollowupService({db,config,providers}: {db:Database;config
       const attempt=(await tx.query('SELECT status,attempt_token FROM followup_turns WHERE id=$1 FOR UPDATE',[claim.turnId])).rows[0];
       if(attempt?.status!=='pending'||attempt.attempt_token!==claim.attemptToken)throw conflict('该回答已由新的处理接管，旧回复已丢弃');
       await tx.query("UPDATE followup_turns SET status='completed',assistant_text=$1,evidence=$2,timing=$3,lease_until=NULL WHERE id=$4",[outcome.reply,JSON.stringify(outcome.facts),{agentMs:outcome.elapsedMs},claim.turnId]);
-      const status=outcome.handoff?'handoff':s.status==='paused'?'paused':outcome.done?'awaiting_confirmation':'active';
+      const status=outcome.endRequested?'submitted':outcome.handoff?'handoff':s.status==='paused'?'paused':outcome.done?'awaiting_confirmation':'active';
       await tx.query(`UPDATE followup_sessions SET state=$1,summary=$2,status=$3,priority=CASE WHEN priority='urgent' THEN priority ELSE $4 END,review_status=CASE WHEN $5 THEN 'pending' ELSE review_status END,updated_at=now() WHERE id=$6`,
         [outcome.state,collectionSummary(outcome.state),status,outcome.priority,outcome.handoff,id]);
       await tx.query('INSERT INTO agent_runs(id,session_id,turn_id,session_version,role,provider,model,output,elapsed_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
-        [randomUUID(),id,claim.turnId,claim.version,outcome.handoff?'safety':'dialogue',outcome.provider,outcome.model,{facts:outcome.facts,action:outcome.handoff?'handoff':outcome.done?'confirm':'ask',reason:outcome.reason},outcome.elapsedMs]);
+        [randomUUID(),id,claim.turnId,claim.version,outcome.priority==='urgent'?'safety':'dialogue',outcome.provider,outcome.model,{facts:outcome.facts,action:outcome.action,focusField:outcome.focusField,phase:outcome.state.phase,reason:outcome.reason},outcome.elapsedMs]);
       await tx.query("INSERT INTO background_jobs(id,kind,session_id,session_version) VALUES($1,'review',$2,$3) ON CONFLICT DO NOTHING",[randomUUID(),id,claim.version]);
+      if(outcome.endRequested){
+        await tx.query("UPDATE followup_sessions SET patient_confirmed=false,submission_version=version,submitted_at=COALESCE(submitted_at,now()),review_status='pending' WHERE id=$1",[id]);
+        if(s.task_id)await tx.query("UPDATE followup_tasks SET status='submitted',updated_at=now() WHERE id=$1",[s.task_id]);
+        await audit(tx,identity.accountId,'followup.submit','followup',id,{confirmed:false,reason:'patient_finished',version:claim.version});
+      }
       if (outcome.handoff) {
         await audit(tx,identity.accountId,'followup.handoff','followup',id,{reason:outcome.reason});
         if (s.task_id) await tx.query("UPDATE followup_tasks SET status='submitted',updated_at=now() WHERE id=$1",[s.task_id]);
@@ -127,7 +137,7 @@ export function createFollowupService({db,config,providers}: {db:Database;config
       await guard(tx,identity);
       const s=await ownedSession(tx,identity,id,true);
       if (['submitted','handoff','cancelled'].includes(s.status)) return patientSessionView(tx,s);
-      const status=resume?(!s.state?.nextField||s.state.answerCount>=10?'awaiting_confirmation':'active'):'paused';
+      const status=resume?(s.state?.phase==='closing'?'awaiting_confirmation':'active'):'paused';
       const r=await tx.query('UPDATE followup_sessions SET status=$1,updated_at=now() WHERE id=$2 RETURNING *',[status,id]);
       return patientSessionView(tx,r.rows[0]);
     });

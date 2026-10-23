@@ -19,9 +19,10 @@ export class SilenceSegmenter {
   constructor(private rate:number) {}
   push(samples:Float32Array) {
     let power=0;for(const value of samples)power+=value*value;
-    const rms=Math.sqrt(power/Math.max(1,samples.length));const seconds=samples.length/this.rate;this.total+=seconds;
+    const rms=Math.sqrt(power/Math.max(1,samples.length));const seconds=samples.length/this.rate;
     const voiced=rms>Math.max(.012,this.noise*3);
+    if(voiced||this.speech>0)this.total+=seconds;
     if(voiced){this.speech+=seconds;this.quiet=0;}else{this.quiet+=seconds;if(!this.speech)this.noise=.95*this.noise+.05*Math.min(rms,.015);}
-    return { voiced:this.speech>=.12, level:Math.min(1,rms*8), finish:this.total>=24 || (this.speech>=.12&&this.quiet>=.85) };
+    return { started:this.speech>0, voiced:this.speech>=.12, level:Math.min(1,rms*8), finish:this.total>=24-1e-6 || (this.speech>=.12&&this.quiet>=2.5-1e-6) };
   }
 }
